@@ -18,7 +18,7 @@ const CALIB_DOTS = [
   { id: "Bottom-Right", top: 90, left: 90 },
 ];
 
-const PASSAGES = [
+const DEFAULT_PASSAGES = [
   "Typography is the art and technique of arranging type to make written language legible, readable, and appealing when displayed. The arrangement of type involves selecting typefaces, point sizes, line lengths, line-spacing, and letter-spacing.",
   "The term typography is also applied to the style, arrangement, and appearance of the letters, numbers, and symbols created by the process. Type design is a closely related craft, sometimes considered part of typography.",
   "For readers with dyslexia, specific typographic adjustments can significantly improve reading speed and comprehension. Larger font sizes, increased spacing between lines, and the use of sans-serif typefaces reduce the visual crowding that causes letters to blur or merge together.",
@@ -78,7 +78,65 @@ export default function Home() {
   const [showEyeCursor, setShowEyeCursor] = useState(false);
   const [bionicMode, setBionicMode] = useState("auto");
 
+  const [passages, setPassages] = useState(DEFAULT_PASSAGES);
+  const [passageTitle, setPassageTitle] = useState("The History of Typography");
+  const [showTextInputModal, setShowTextInputModal] = useState(false);
+  const [pastedText, setPastedText] = useState("");
+
   const { feed, signals, registerLineRefs } = useReadingBehavior();
+
+  const parseAndSetText = (rawText, title) => {
+    const lines = rawText
+      .split(/\n\s*\n/)
+      .map((p) => p.replace(/\s+/g, " ").trim())
+      .filter((p) => p.length > 0);
+
+    if (lines.length > 0) {
+      setPassages(lines);
+      setPassageTitle(title || "Custom Uploaded Document");
+    }
+  };
+
+  const handleFileUpload = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    try {
+      if (file.name.endsWith(".txt")) {
+        const text = await file.text();
+        parseAndSetText(text, file.name);
+      } else if (file.name.endsWith(".pdf")) {
+        const arrayBuffer = await file.arrayBuffer();
+        if (!window.pdfjsLib) {
+          await new Promise((resolve, reject) => {
+            const script = document.createElement("script");
+            script.src = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js";
+            script.onload = resolve;
+            script.onerror = reject;
+            document.head.appendChild(script);
+          });
+          window.pdfjsLib.GlobalWorkerOptions.workerSrc =
+            "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+        }
+        
+        const loadingTask = window.pdfjsLib.getDocument({ data: arrayBuffer });
+        const pdf = await loadingTask.promise;
+        let fullText = "";
+        
+        for (let i = 1; i <= pdf.numPages; i++) {
+          const page = await pdf.getPage(i);
+          const textContent = await page.getTextContent();
+          const pageText = textContent.items.map((item) => item.str).join(" ");
+          fullText += pageText + "\n\n";
+        }
+        
+        parseAndSetText(fullText, file.name);
+      }
+    } catch (err) {
+      console.error("Error loading document:", err);
+      alert("Error reading file. Please ensure it is a valid .txt or .pdf file.");
+    }
+  };
 
   const gazeDataRef = useRef(null);
   const handleGazeUpdate = useCallback((data) => {
@@ -259,9 +317,69 @@ export default function Home() {
         boxShadow: currentTheme.cardBg ? "0 8px 32px rgba(0,0,0,0.3)" : "none",
         transition: "all 0.3s ease"
       }}>
-        <h2 style={{ fontSize: "2.5rem", marginBottom: "30px", color: currentTheme.brightAccent || currentTheme.text }}>
-          The History of Typography
-        </h2>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "15px", marginBottom: "30px" }}>
+          <h2 style={{ fontSize: "2.2rem", margin: 0, color: currentTheme.brightAccent || currentTheme.text }}>
+            {passageTitle}
+          </h2>
+
+          <div style={{ display: "flex", gap: "10px", flexWrap: "wrap", alignItems: "center" }}>
+            <label
+              style={{
+                padding: "8px 14px",
+                background: currentTheme.accent || "#3E6259",
+                color: "#fff",
+                borderRadius: "6px",
+                cursor: "pointer",
+                fontSize: "13px",
+                fontWeight: "bold",
+                display: "inline-flex",
+                alignItems: "center",
+                gap: "6px"
+              }}
+            >
+              📂 Upload File (.txt / .pdf)
+              <input
+                type="file"
+                accept=".txt,.pdf"
+                onChange={handleFileUpload}
+                style={{ display: "none" }}
+              />
+            </label>
+
+            <button
+              onClick={() => setShowTextInputModal(true)}
+              style={{
+                padding: "8px 14px",
+                background: `${currentTheme.brightAccent || "#6FAF8F"}22`,
+                color: currentTheme.text,
+                border: `1px solid ${currentTheme.border || "#303936"}`,
+                borderRadius: "6px",
+                cursor: "pointer",
+                fontSize: "13px",
+                fontWeight: "bold"
+              }}
+            >
+              ✏️ Paste Custom Text
+            </button>
+
+            {passages !== DEFAULT_PASSAGES && (
+              <button
+                onClick={() => { setPassages(DEFAULT_PASSAGES); setPassageTitle("The History of Typography"); }}
+                style={{
+                  padding: "8px 12px",
+                  background: "transparent",
+                  color: currentTheme.secText || "#A7B0AA",
+                  border: `1px solid ${currentTheme.border || "#303936"}`,
+                  borderRadius: "6px",
+                  cursor: "pointer",
+                  fontSize: "12px"
+                }}
+              >
+                ↺ Reset
+              </button>
+            )}
+          </div>
+        </div>
         
         <div style={{ 
           fontSize: fontSize, 
@@ -269,7 +387,7 @@ export default function Home() {
           letterSpacing: letterSpacing,
           transition: "font-size 0.2s, line-height 0.2s, letter-spacing 0.2s" 
         }}>
-          {PASSAGES.map((text, idx) => {
+          {passages.map((text, idx) => {
             const isBionicActive =
               bionicMode === "on" ||
               (bionicMode === "auto" && signals.dwellMs > 350 && signals.currentLineIndex === idx);
@@ -299,6 +417,53 @@ export default function Home() {
           })}
         </div>
       </div>
+
+      {/* CUSTOM TEXT INPUT MODAL */}
+      {showTextInputModal && (
+        <div style={{
+          position: "fixed", inset: 0, backgroundColor: "rgba(0,0,0,0.75)", backdropFilter: "blur(4px)",
+          zIndex: 99999, display: "flex", justifyContent: "center", alignItems: "center", padding: "20px"
+        }}>
+          <div style={{
+            background: currentTheme.cardBg || "#1C2421", color: currentTheme.text || "#F2F0E8",
+            border: `1px solid ${currentTheme.border || "#303936"}`, padding: "25px", borderRadius: "12px",
+            maxWidth: "600px", width: "100%", boxShadow: "0 10px 30px rgba(0,0,0,0.5)"
+          }}>
+            <h3 style={{ marginTop: 0, color: currentTheme.brightAccent || "#6FAF8F" }}>Paste Custom Reading Text</h3>
+            <textarea
+              rows={8}
+              value={pastedText}
+              onChange={(e) => setPastedText(e.target.value)}
+              placeholder="Paste any article, document, or reading material here..."
+              style={{
+                width: "100%", padding: "12px", borderRadius: "8px", border: `1px solid ${currentTheme.border || "#303936"}`,
+                background: currentTheme.bg || "#111514", color: currentTheme.text || "#F2F0E8", fontSize: "14px",
+                fontFamily: "sans-serif", resize: "vertical"
+              }}
+            />
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: "10px", marginTop: "15px" }}>
+              <button
+                onClick={() => setShowTextInputModal(false)}
+                style={{ padding: "8px 16px", background: "transparent", border: `1px solid ${currentTheme.border || "#303936"}`, color: currentTheme.text, borderRadius: "6px", cursor: "pointer" }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => {
+                  if (pastedText.trim()) {
+                    parseAndSetText(pastedText, "Custom Pasted Article");
+                    setPastedText("");
+                    setShowTextInputModal(false);
+                  }
+                }}
+                style={{ padding: "8px 16px", background: currentTheme.brightAccent || "#6FAF8F", color: "#111514", border: "none", borderRadius: "6px", cursor: "pointer", fontWeight: "bold" }}
+              >
+                Apply Text
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* FOCUS RULER */}
       {gazeData && calibState !== "calibrating" && focusRulerEnabled && (
