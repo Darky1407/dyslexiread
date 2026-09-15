@@ -1,210 +1,192 @@
 "use client";
 
-import { useEffect, useRef, useState, useCallback } from "react";
+import { useState, useEffect } from "react";
+import GazeTracker from "./GazeTracker";
 
-let webgazerInitStarted = false;
+const CALIB_DOTS = [
+  { id: "Top-Left", top: 10, left: 10 },
+  { id: "Top-Right", top: 10, left: 90 },
+  { id: "Bottom-Right", top: 90, left: 90 },
+  { id: "Bottom-Left", top: 90, left: 10 },
+];
 
-export default function GazeTracker({ onGaze, onCalibrated, showVideoPreview = false }) {
-  const [status, setStatus] = useState("idle");
-  const [error, setError] = useState(null);
-  const [calibrationHits, setCalibrationHits] = useState({});
-  const webgazerRef = useRef(null);
-  const scriptLoadedRef = useRef(false);
+export default function Home() {
+  const [gazeData, setGazeData] = useState(null);
+  
+  const [calibState, setCalibState] = useState("idle");
+  const [calibIndex, setCalibIndex] = useState(0);
+  const [rawPoints, setRawPoints] = useState([]);
+  const [bounds, setBounds] = useState(null);
+  const [calibError, setCalibError] = useState(false);
 
-  const CALIBRATION_POINTS = [
-    [5, 5], [50, 5], [95, 5],
-    [5, 50], [50, 50], [95, 50],
-    [5, 95], [50, 95], [95, 95],
-  ];
-  const CLICKS_NEEDED_PER_POINT = 5;
+  const handleGazeUpdate = (data) => {
+    setGazeData(data);
+  };
 
   useEffect(() => {
-    if (scriptLoadedRef.current) return;
-    scriptLoadedRef.current = true;
+    const handleKeyDown = (e) => {
+      if (e.code === "Space" && calibState === "calibrating" && gazeData) {
+        e.preventDefault();
+        
+        // FIX 1: We invert the X coordinate instantly so Left=0 and Right=1
+        // This matches standard screen coordinates and stops the math from breaking.
+        const currentPoint = {
+          x: 1 - parseFloat(gazeData.x),
+          y: parseFloat(gazeData.y)
+        };
 
-    if (webgazerInitStarted) return;
-    webgazerInitStarted = true;
+        const newPoints = [...rawPoints, currentPoint];
+        setRawPoints(newPoints);
 
-    setStatus("loading");
-
-    const script = document.createElement("script");
-    script.src = "https://webgazer.cs.brown.edu/webgazer.js";
-    script.async = true;
-
-    script.onload = async () => {
-      try {
-        setStatus("permission");
-        const webgazer = window.webgazer;
-        webgazerRef.current = webgazer;
-
-        webgazer
-          .setRegression("ridge")
-          .setGazeListener((data, timestamp) => {
-            if (!data) return;
-            onGaze?.({ x: data.x, y: data.y, t: timestamp });
-          })
-          .saveDataAcrossSessions(false);
-
-        await webgazer.begin();
-
-        webgazer.showVideoPreview(showVideoPreview);
-        webgazer.showPredictionPoints(false);
-        webgazer.showFaceOverlay(false);
-        webgazer.showFaceFeedbackBox(false);
-
-        setStatus("calibrating");
-      } catch (err) {
-        console.error("WebGazer init failed:", err);
-        setError(
-          err?.message?.includes("Permission")
-            ? "Webcam permission was denied. Please allow camera access and reload."
-            : "Could not start webcam tracking. Check console for details."
-        );
-        setStatus("error");
+        if (calibIndex < 3) {
+          setCalibIndex((prev) => prev + 1);
+        } else {
+          finishCalibration(newPoints);
+        }
       }
     };
+    
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [calibState, calibIndex, gazeData, rawPoints]);
 
-    script.onerror = () => {
-      setError("Failed to load WebGazer.js — check your internet connection.");
-      setStatus("error");
-    };
+  const finishCalibration = (points) => {
+    const camX_Left = (points[0].x + points[3].x) / 2;
+    const camX_Right = (points[1].x + points[2].x) / 2;
+    
+    const camY_Top = (points[0].y + points[1].y) / 2;
+    const camY_Bottom = (points[2].y + points[3].y) / 2;
 
-    document.body.appendChild(script);
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
-
-  const registerCalibrationClick = useCallback(
-    (pointIndex) => (e) => {
-      const webgazer = webgazerRef.current;
-      if (!webgazer) return;
-
-      webgazer.recordScreenPosition(e.clientX, e.clientY, "click");
-
-      setCalibrationHits((prev) => ({
-        ...prev,
-        [pointIndex]: (prev[pointIndex] || 0) + 1,
-      }));
-    },
-    []
-  );
-
-  useEffect(() => {
-    if (status !== "calibrating") return;
-    const allDone = CALIBRATION_POINTS.every(
-      (_, i) => (calibrationHits[i] || 0) >= CLICKS_NEEDED_PER_POINT
-    );
-    if (allDone) {
-      setStatus("tracking");
-      onCalibrated?.();
+    // FIX: Lowered the threshold from 0.01 down to 0.002
+    // This allows for the extremely tiny iris movements typical on laptop webcams.
+    // We keep a small check just to prevent "divide by zero" math explosions.
+    if (Math.abs(camX_Right - camX_Left) < 0.002 || Math.abs(camY_Bottom - camY_Top) < 0.002) {
+      setCalibError(true);
+      setCalibState("done");
+      return;
     }
-  }, [calibrationHits, status, onCalibrated]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  if (status === "error") {
-    return (
-      <div style={styles.messageBoxError}>
-        {error}
-      </div>
-    );
+    setBounds({
+      xLeft: camX_Left,
+      xRight: camX_Right,
+      yTop: camY_Top,
+      yBottom: camY_Bottom
+    });
+    
+    setCalibError(false);
+    setCalibState("done");
+  };
+
+  const mapRange = (val, inMin, inMax, outMin, outMax) => {
+    return ((val - inMin) * (outMax - outMin)) / (inMax - inMin) + outMin;
+  };
+
+  const clamp = (val, min, max) => {
+    return Math.max(min, Math.min(max, val));
+  };
+
+  let cursorX = 50; 
+  let cursorY = 50; 
+
+  if (gazeData) {
+    // FIX 3: Apply the same inversion to the live gaze data
+    const rawX = 1 - parseFloat(gazeData.x);
+    const rawY = parseFloat(gazeData.y);
+
+    if (calibState === "done" && bounds && !calibError) {
+      let rawCursorX = mapRange(rawX, bounds.xLeft, bounds.xRight, 10, 90);
+      let rawCursorY = mapRange(rawY, bounds.yTop, bounds.yBottom, 10, 90);
+
+      cursorX = clamp(rawCursorX, 2, 98);
+      cursorY = clamp(rawCursorY, 2, 98);
+    } else {
+      // Uncalibrated / Error fallback
+      cursorX = clamp(rawX * 100, 2, 98);
+      cursorY = clamp(rawY * 100, 2, 98);
+    }
   }
 
-  if (status === "idle" || status === "loading") {
-    return <div style={styles.messageBox}>Loading gaze tracker…</div>;
-  }
-
-  if (status === "permission") {
-    return (
-      <div style={styles.messageBox}>
-        Requesting webcam access — please allow it in the browser prompt.
-      </div>
-    );
-  }
-
-  if (status === "calibrating") {
-    return (
-      <div style={styles.overlay}>
-        <div style={styles.overlayText}>
-          <p style={{ fontWeight: 600, marginBottom: 4 }}>Calibrating gaze tracker</p>
-          <p style={{ fontSize: 14, color: "#cbd5e1" }}>
-            Look at each dot and click it {CLICKS_NEEDED_PER_POINT} times.
-            Keep your head roughly still and centered on the webcam.
-          </p>
-        </div>
-        {CALIBRATION_POINTS.map(([xPct, yPct], i) => {
-          const hits = calibrationHits[i] || 0;
-          const done = hits >= CLICKS_NEEDED_PER_POINT;
-          return (
-            <button
-              key={i}
-              onClick={registerCalibrationClick(i)}
-              style={{
-                ...styles.dot,
-                left: `${xPct}%`,
-                top: `${yPct}%`,
-                backgroundColor: done ? "#4ade80" : "rgba(251,191,36,0.8)",
-                borderColor: done ? "#86efac" : "#fde68a",
-              }}
-              aria-label={`Calibration point ${i + 1}, ${hits}/${CLICKS_NEEDED_PER_POINT} clicks`}
+  return (
+    <main style={{ minHeight: "100vh", position: "relative", fontFamily: "sans-serif", overflow: "hidden" }}>
+      
+      <div style={{ padding: "40px" }}>
+        <h1>DyslexiRead</h1>
+        
+        {calibState === "idle" && (
+          <div>
+            <p>We need to calibrate the eye tracker to your screen.</p>
+            <p style={{ fontSize: "14px", color: "#666" }}>
+              <b>Tip:</b> Keep your head perfectly still. ONLY move your eyes to the dots.
+            </p>
+            <button 
+              onClick={() => { setCalibState("calibrating"); setCalibError(false); }}
+              style={{ padding: "10px 20px", fontSize: "16px", cursor: "pointer" }}
             >
-              <span style={styles.srOnly}>{hits}/{CLICKS_NEEDED_PER_POINT}</span>
+              Start Calibration
             </button>
-          );
-        })}
+          </div>
+        )}
+
+        {calibState === "done" && (
+          <div>
+            {calibError ? (
+              <p style={{ color: "red", fontWeight: "bold" }}>⚠️ Calibration failed: Eye movement too small.</p>
+            ) : (
+              <p style={{ color: "green", fontWeight: "bold" }}>✅ Calibration Complete!</p>
+            )}
+            <button 
+              onClick={() => { setCalibState("idle"); setCalibIndex(0); setRawPoints([]); }}
+              style={{ padding: "5px 10px", marginTop: "10px", cursor: "pointer" }}
+            >
+              Recalibrate
+            </button>
+          </div>
+        )}
       </div>
-    );
-  }
 
-  return null;
+      <div style={{ position: "absolute", top: "20px", right: "20px" }}>
+        <GazeTracker onGazeUpdate={handleGazeUpdate} />
+      </div>
+
+      {calibState === "calibrating" && (
+        <div style={{ position: "absolute", inset: 0, backgroundColor: "rgba(255,255,255,0.9)", zIndex: 50 }}>
+          <h2 style={{ textAlign: "center", marginTop: "40px" }}>
+            Look at the red dot and press the SPACEBAR. ({calibIndex + 1}/4)
+          </h2>
+          
+          <div
+            style={{
+              position: "absolute",
+              top: `${CALIB_DOTS[calibIndex].top}%`,
+              left: `${CALIB_DOTS[calibIndex].left}%`,
+              width: "30px",
+              height: "30px",
+              backgroundColor: "red",
+              borderRadius: "50%",
+              transform: "translate(-50%, -50%)",
+              boxShadow: "0 0 15px rgba(255,0,0,0.5)"
+            }}
+          />
+        </div>
+      )}
+
+      {gazeData && calibState !== "calibrating" && (
+        <div
+          style={{
+            position: "fixed",
+            left: `${cursorX}vw`,
+            top: `${cursorY}vh`,
+            width: "20px",
+            height: "20px",
+            backgroundColor: (calibState === "done" && !calibError) ? "blue" : "red",
+            borderRadius: "50%",
+            transform: "translate(-50%, -50%)",
+            pointerEvents: "none",
+            zIndex: 9999,
+            transition: "left 0.1s ease-out, top 0.1s ease-out" 
+          }}
+        />
+      )}
+    </main>
+  );
 }
-
-const styles = {
-  messageBox: {
-    padding: 16,
-    borderRadius: 8,
-    backgroundColor: "#f8fafc",
-    border: "1px solid #e2e8f0",
-    color: "#475569",
-    fontSize: 14,
-  },
-  messageBoxError: {
-    padding: 16,
-    borderRadius: 8,
-    backgroundColor: "#fef2f2",
-    border: "1px solid #fecaca",
-    color: "#b91c1c",
-    fontSize: 14,
-  },
-  overlay: {
-    position: "fixed",
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    backgroundColor: "rgba(15,23,42,0.95)",
-    zIndex: 9999,
-    color: "#fff",
-  },
-  overlayText: {
-    position: "absolute",
-    top: 24,
-    left: "50%",
-    transform: "translateX(-50%)",
-    textAlign: "center",
-    maxWidth: 400,
-    padding: "0 16px",
-  },
-  dot: {
-    position: "absolute",
-    transform: "translate(-50%, -50%)",
-    width: 32,
-    height: 32,
-    borderRadius: "50%",
-    border: "2px solid",
-    cursor: "pointer",
-  },
-  srOnly: {
-    position: "absolute",
-    width: 1,
-    height: 1,
-    overflow: "hidden",
-    clip: "rect(0,0,0,0)",
-  },
-};
