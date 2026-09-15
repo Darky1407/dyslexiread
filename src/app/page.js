@@ -18,7 +18,7 @@ const CALIB_DOTS = [
   { id: "Bottom-Right", top: 90, left: 90 },
 ];
 
-const PASSAGES = [
+const INITIAL_PASSAGES = [
   "Typography is the art and technique of arranging type to make written language legible, readable, and appealing when displayed. The arrangement of type involves selecting typefaces, point sizes, line lengths, line-spacing, and letter-spacing.",
   "The term typography is also applied to the style, arrangement, and appearance of the letters, numbers, and symbols created by the process. Type design is a closely related craft, sometimes considered part of typography.",
   "For readers with dyslexia, specific typographic adjustments can significantly improve reading speed and comprehension. Larger font sizes, increased spacing between lines, and the use of sans-serif typefaces reduce the visual crowding that causes letters to blur or merge together.",
@@ -57,6 +57,13 @@ const THEMES = {
 };
 
 export default function Home() {
+  // PDF Parsing, Text & Pagination State
+  const [passages, setPassages] = useState(INITIAL_PASSAGES);
+  const [docTitle, setDocTitle] = useState("The History of Typography");
+  const [isParsing, setIsParsing] = useState(false);
+  const [currentPage, setCurrentPage] = useState(0);
+  const ITEMS_PER_PAGE = 15;
+
   const [gazeData, setGazeData] = useState(null);
   
   const [calibState, setCalibState] = useState("idle");
@@ -81,10 +88,75 @@ export default function Home() {
   const { feed, signals, registerLineRefs } = useReadingBehavior();
 
   const gazeDataRef = useRef(null);
+  const lastRenderRef = useRef(0);
+
   const handleGazeUpdate = useCallback((data) => {
     gazeDataRef.current = data;
-    setGazeData(data);
+    // Throttled UI state update to protect performance on long documents
+    const now = Date.now();
+    if (now - lastRenderRef.current > 66) {
+      setGazeData(data);
+      lastRenderRef.current = now;
+    }
   }, []);
+
+  // SAFE CDN-BASED PDF UPLOAD LOGIC
+  const handleFileUpload = async (event) => {
+    const file = event.target.files[0];
+    if (!file || file.type !== "application/pdf") return;
+
+    setIsParsing(true);
+    setDocTitle(file.name.replace(".pdf", ""));
+    
+    try {
+      if (!window.pdfjsLib) {
+        await new Promise((resolve, reject) => {
+          const script = document.createElement("script");
+          script.src = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js";
+          script.onload = resolve;
+          script.onerror = reject;
+          document.head.appendChild(script);
+        });
+        window.pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+      }
+
+      const arrayBuffer = await file.arrayBuffer();
+      const typedArray = new Uint8Array(arrayBuffer);
+
+      const loadingTask = window.pdfjsLib.getDocument({ data: typedArray });
+      const pdf = await loadingTask.promise;
+      let newPassages = [];
+
+      for (let i = 1; i <= pdf.numPages; i++) {
+        const page = await pdf.getPage(i);
+        const textContent = await page.getTextContent();
+        
+        if (!textContent.items || textContent.items.length === 0) continue;
+
+        const pageText = textContent.items.map((item) => item.str).join(" ");
+        const sentences = pageText.match(/[^.!?]+[.!?]+/g) || [pageText];
+        
+        sentences.forEach(sentence => {
+          const clean = sentence.replace(/\s+/g, " ").trim();
+          if (clean.length > 10) newPassages.push(clean);
+        });
+      }
+
+      if (newPassages.length === 0) {
+        alert("No readable text found! If this is a scanned PDF, the app cannot read it because it is essentially an image.");
+        setPassages(["No readable text found. Upload a standard text-based PDF."]);
+      } else {
+        setPassages(newPassages);
+        setCurrentPage(0);
+      }
+    } catch (error) {
+      console.error("PDF Parsing Error:", error);
+      alert(`Could not read PDF: ${error.message}`);
+    }
+    
+    setIsParsing(false);
+    event.target.value = '';
+  };
 
   useEffect(() => {
     const handleKeyDown = (e) => {
@@ -113,6 +185,18 @@ export default function Home() {
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [calibState, calibIndex, gazeData, rawPoints]);
+  // SMART LINE-SNAPPING FIX FOR FOCUS RULER
+  useEffect(() => {
+    if (signals.currentLineIndex !== null && signals.currentLineIndex !== undefined) {
+      const lineEl = document.querySelector(`[data-line-index="${signals.currentLineIndex}"]`);
+      if (lineEl) {
+        const rect = lineEl.getBoundingClientRect();
+        // Calculate the exact vertical center of the active paragraph in viewport percentage (vh)
+        const lineCenterYVh = ((rect.top + rect.height / 2) / window.innerHeight) * 100;
+        targetYRef.current = clamp(lineCenterYVh, 5, 95);
+      }
+    }
+  }, [signals.currentLineIndex]);
 
   const finishCalibration = (points) => {
     let xLeft = (points[0].x + points[3].x + points[6].x) / 3;
@@ -174,9 +258,9 @@ export default function Home() {
       cX = clamp(rawCursorX, 2, 98);
       cY = clamp(rawCursorY, 5, 95);
     } else {
-      // Uncalibrated auto-scaling for MediaPipe camera iris Y range (~0.28..0.45)
+      // Uncalibrated auto-scaling for MediaPipe camera iris Y range (~0.20..0.60)
       const rawCursorX = clamp(rawX * 100, 2, 98);
-      const rawCursorY = mapRange(rawY, 0.28, 0.45, 10, 90);
+      const rawCursorY = mapRange(rawY, 0.20, 0.60, 10, 90);
 
       cX = rawCursorX;
       cY = clamp(rawCursorY, 5, 95);
@@ -259,45 +343,122 @@ export default function Home() {
         boxShadow: currentTheme.cardBg ? "0 8px 32px rgba(0,0,0,0.3)" : "none",
         transition: "all 0.3s ease"
       }}>
-        <h2 style={{ fontSize: "2.5rem", marginBottom: "30px", color: currentTheme.brightAccent || currentTheme.text }}>
-          The History of Typography
-        </h2>
         
+        {/* TITLE & PDF UPLOAD BUTTON */}
+        <div style={{ marginBottom: "30px", display: "flex", justifyContent: "space-between", alignItems: "center", gap: "20px" }}>
+          <h2 style={{ fontSize: "2rem", margin: 0, color: currentTheme.brightAccent || currentTheme.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+            {docTitle}
+          </h2>
+          <label style={{
+            padding: "10px 20px",
+            backgroundColor: currentTheme.accent,
+            color: currentTheme.bg,
+            borderRadius: "8px",
+            cursor: "pointer",
+            fontWeight: "bold",
+            fontSize: "14px",
+            boxShadow: "0 4px 12px rgba(0,0,0,0.15)",
+            flexShrink: 0
+          }}>
+            {isParsing ? "Reading PDF..." : "📄 Upload PDF"}
+            <input 
+              type="file" 
+              accept="application/pdf" 
+              onChange={handleFileUpload} 
+              style={{ display: "none" }} 
+            />
+          </label>
+        </div>
+        
+        {/* PAGINATED TEXT PASSAGES CONTAINER */}
         <div style={{ 
           fontSize: fontSize, 
           lineHeight: lineHeight, 
           letterSpacing: letterSpacing,
           transition: "font-size 0.2s, line-height 0.2s, letter-spacing 0.2s" 
         }}>
-          {PASSAGES.map((text, idx) => {
-            const isBionicActive =
-              bionicMode === "on" ||
-              (bionicMode === "auto" && signals.dwellMs > 350 && signals.currentLineIndex === idx);
+          {passages
+            .slice(currentPage * ITEMS_PER_PAGE, (currentPage + 1) * ITEMS_PER_PAGE)
+            .map((text, idx) => {
+              const absoluteIdx = currentPage * ITEMS_PER_PAGE + idx;
+              const isBionicActive =
+                bionicMode === "on" ||
+                (bionicMode === "auto" && signals.dwellMs > 350 && signals.currentLineIndex === absoluteIdx);
 
-            return (
-              <p
-                key={idx}
-                ref={registerLineRefs(idx)}
-                data-line-index={idx}
-                style={{
-                  marginBottom: "25px",
-                  padding: "8px 14px",
-                  borderRadius: "8px",
-                  backgroundColor:
-                    signals.currentLineIndex === idx
-                      ? (currentTheme.highlight ? `${currentTheme.highlight}20` : "rgba(255, 235, 59, 0.12)")
-                      : "transparent",
-                  borderLeft: signals.currentLineIndex === idx
-                    ? `4px solid ${currentTheme.brightAccent || "#6FAF8F"}`
-                    : "4px solid transparent",
-                  transition: "background-color 0.3s, border-left 0.3s"
-                }}
-              >
-                {isBionicActive ? parseBionic(text) : text}
-              </p>
-            );
-          })}
+              return (
+                <p
+                  key={absoluteIdx}
+                  ref={registerLineRefs(absoluteIdx)}
+                  data-line-index={absoluteIdx}
+                  style={{
+                    marginBottom: "25px",
+                    padding: "8px 14px",
+                    borderRadius: "8px",
+                    backgroundColor:
+                      signals.currentLineIndex === absoluteIdx
+                        ? (currentTheme.highlight ? `${currentTheme.highlight}20` : "rgba(255, 235, 59, 0.12)")
+                        : "transparent",
+                    borderLeft: signals.currentLineIndex === absoluteIdx
+                      ? `4px solid ${currentTheme.brightAccent || "#6FAF8F"}`
+                      : "4px solid transparent",
+                    transition: "background-color 0.3s, border-left 0.3s"
+                  }}
+                >
+                  {isBionicActive ? parseBionic(text) : text}
+                </p>
+              );
+            })}
         </div>
+
+        {/* PAGINATION CONTROLS */}
+        {passages.length > ITEMS_PER_PAGE && (
+          <div style={{ 
+            display: "flex", 
+            justifyContent: "space-between", 
+            alignItems: "center",
+            marginTop: "40px",
+            paddingTop: "20px",
+            borderTop: `1px solid ${currentTheme.border || "transparent"}`
+          }}>
+            <button 
+              onClick={() => {
+                setCurrentPage(p => Math.max(0, p - 1));
+                window.scrollTo({ top: 0, behavior: 'smooth' });
+              }}
+              disabled={currentPage === 0}
+              style={{
+                padding: "8px 16px", borderRadius: "6px", border: "none", cursor: currentPage === 0 ? "default" : "pointer",
+                backgroundColor: currentPage === 0 ? "transparent" : currentTheme.accent,
+                color: currentPage === 0 ? currentTheme.secText : currentTheme.bg,
+                opacity: currentPage === 0 ? 0.4 : 1,
+                fontWeight: "bold"
+              }}
+            >
+              ← Previous Page
+            </button>
+            
+            <span style={{ fontSize: "14px", color: currentTheme.secText }}>
+              Page {currentPage + 1} of {Math.ceil(passages.length / ITEMS_PER_PAGE)}
+            </span>
+            
+            <button 
+              onClick={() => {
+                setCurrentPage(p => Math.min(Math.ceil(passages.length / ITEMS_PER_PAGE) - 1, p + 1));
+                window.scrollTo({ top: 0, behavior: 'smooth' });
+              }}
+              disabled={currentPage === Math.ceil(passages.length / ITEMS_PER_PAGE) - 1}
+              style={{
+                padding: "8px 16px", borderRadius: "6px", border: "none", cursor: currentPage === Math.ceil(passages.length / ITEMS_PER_PAGE) - 1 ? "default" : "pointer",
+                backgroundColor: currentPage === Math.ceil(passages.length / ITEMS_PER_PAGE) - 1 ? "transparent" : currentTheme.accent,
+                color: currentPage === Math.ceil(passages.length / ITEMS_PER_PAGE) - 1 ? currentTheme.secText : currentTheme.bg,
+                opacity: currentPage === Math.ceil(passages.length / ITEMS_PER_PAGE) - 1 ? 0.4 : 1,
+                fontWeight: "bold"
+              }}
+            >
+              Next Page →
+            </button>
+          </div>
+        )}
       </div>
 
       {/* FOCUS RULER */}
