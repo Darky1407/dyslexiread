@@ -6,6 +6,8 @@ import Toolbar from "../components/Toolbar";
 import { parseBionic } from "../components/bionicParser";
 import { useReadingBehavior } from "../components/useReadingBehavior";
 
+import { io } from "socket.io-client";
+
 const CALIB_DOTS = [
   { id: "Top-Left", top: 10, left: 10 },
   { id: "Top-Center", top: 10, left: 50 },
@@ -82,6 +84,69 @@ export default function Home() {
   const [passageTitle, setPassageTitle] = useState("The History of Typography");
   const [showTextInputModal, setShowTextInputModal] = useState(false);
   const [pastedText, setPastedText] = useState("");
+
+  // Haptics Socket & Room State
+  const socketRef = useRef(null);
+  const [socketStatus, setSocketStatus] = useState("disconnected");
+  const [roomId, setRoomId] = useState("");
+  const [showQR, setShowQR] = useState(false);
+  const [customIp, setCustomIp] = useState("");
+  const [phoneUrl, setPhoneUrl] = useState("");
+
+  const sanitizeHost = (str) => {
+    if (!str) return '';
+    return str
+      .replace(/^https?:\/\//i, '')
+      .replace(/[<>]/g, '')
+      .replace(/:\d+$/, '')
+      .trim();
+  };
+
+  useEffect(() => {
+    let id = localStorage.getItem("dyslexifit_room_id");
+    if (!id) {
+      id = "room-" + Math.random().toString(36).substring(2, 8);
+      localStorage.setItem("dyslexifit_room_id", id);
+    }
+    setRoomId(id);
+
+    const savedIp = localStorage.getItem("dyslexifit_custom_ip");
+    const rawHost = savedIp || "lucky-results-listen.loca.lt";
+    const initialHost = sanitizeHost(rawHost) || "localhost";
+    setCustomIp(initialHost);
+
+    const protocol = initialHost.includes(".loca.lt") ? "https" : "http";
+    const portSuffix = initialHost.includes(".loca.lt") ? "" : ":3001";
+    const targetUrl = `${protocol}://${initialHost}${portSuffix}?room=${id}`;
+    setPhoneUrl(targetUrl);
+
+    const socketUrl = typeof window !== "undefined"
+      ? (initialHost.includes(".loca.lt") ? `https://${initialHost}` : `http://${window.location.hostname}:3001`)
+      : "http://localhost:3001";
+
+    const socket = io(socketUrl, { reconnectionAttempts: 5, timeout: 3000 });
+    socketRef.current = socket;
+
+    socket.on("connect", () => {
+      setSocketStatus("connected");
+      socket.emit("join-room", id);
+    });
+    socket.on("connect_error", () => setSocketStatus("offline"));
+
+    return () => socket.disconnect();
+  }, []);
+
+  const handleIpChange = (newIp) => {
+    const cleanHost = sanitizeHost(newIp);
+    setCustomIp(newIp);
+    localStorage.setItem("dyslexifit_custom_ip", cleanHost);
+
+    const activeHost = cleanHost || 'localhost';
+    const protocol = activeHost.includes(".loca.lt") ? "https" : "http";
+    const portSuffix = activeHost.includes(".loca.lt") ? "" : ":3001";
+    const targetUrl = `${protocol}://${activeHost}${portSuffix}?room=${roomId}`;
+    setPhoneUrl(targetUrl);
+  };
 
   const { feed, signals, registerLineRefs } = useReadingBehavior();
 
@@ -219,6 +284,18 @@ export default function Home() {
   useEffect(() => {
     if (!gazeData) return;
 
+    if (gazeData.faceDetected === false) {
+      if (typeof window !== "undefined") {
+        feed({
+          x: -999,
+          y: -999,
+          t: Date.now(),
+          faceDetected: false,
+        });
+      }
+      return;
+    }
+
     const rawX = 1 - parseFloat(gazeData.x);
     const rawY = parseFloat(gazeData.y);
 
@@ -262,6 +339,13 @@ export default function Home() {
     }
   }, [signals.regressionCount]);
 
+  // Reaction 2: Looking Away / Strain Trigger -> Emit Haptic Pulse to Phone
+  useEffect(() => {
+    if (signals.lookingAway || signals.fatigueFlag) {
+      socketRef.current?.emit("pulse", { pattern: [200, 100, 200], roomId });
+    }
+  }, [signals.lookingAway, signals.fatigueFlag, roomId]);
+
   useEffect(() => {
     let animationFrameId;
     const updateRuler = () => {
@@ -274,6 +358,11 @@ export default function Home() {
   }, []);
 
   const currentTheme = THEMES[activeTheme];
+  const isWarningActive = signals.lookingAway || signals.fatigueFlag;
+
+  const qrImageUrl = phoneUrl
+    ? `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(phoneUrl)}`
+    : "";
 
   return (
     <main style={{ minHeight: "100vh", position: "relative", fontFamily: "sans-serif", backgroundColor: currentTheme.bg, color: currentTheme.text, transition: "background-color 0.3s, color 0.3s" }}>
@@ -300,23 +389,106 @@ export default function Home() {
         setBionicMode={setBionicMode}
         behaviorSignals={signals}
         themes={THEMES}
+        onToggleQR={() => setShowQR(!showQR)}
+        showQR={showQR}
+        socketStatus={socketStatus}
+        roomId={roomId}
       />
+
+      {/* QR CODE MODAL */}
+      {showQR && (
+        <div style={{
+          position: "fixed", inset: 0, backgroundColor: "rgba(0,0,0,0.75)", backdropFilter: "blur(4px)",
+          zIndex: 99999, display: "flex", justifyContent: "center", alignItems: "center", padding: "20px"
+        }}>
+          <div style={{
+            background: currentTheme.cardBg || "#1C2421", color: currentTheme.text || "#F2F0E8",
+            border: `1px solid ${currentTheme.border || "#303936"}`, padding: "30px", borderRadius: "16px",
+            maxWidth: "420px", width: "100%", boxShadow: "0 10px 30px rgba(0,0,0,0.5)", textAlign: "center"
+          }}>
+            <h3 style={{ marginTop: 0, color: currentTheme.brightAccent || "#6FAF8F" }}>Connect Phone Haptics</h3>
+            <p style={{ fontSize: "13px", opacity: 0.8, marginBottom: "15px" }}>Scan with your phone camera to pair phone vibration with reading detection.</p>
+            
+            <img
+              src={qrImageUrl}
+              alt="Scan QR Code to connect phone"
+              style={{ width: "180px", height: "180px", borderRadius: "8px", border: "4px solid #fff", margin: "0 auto" }}
+            />
+
+            <div style={{ marginTop: "15px", textAlign: "left" }}>
+              <label style={{ fontSize: "12px", display: "block", marginBottom: "4px", opacity: 0.9 }}>
+                Laptop Wi-Fi IP Address (numbers only, no brackets/http):
+              </label>
+              <input
+                type="text"
+                value={customIp}
+                onChange={(e) => handleIpChange(e.target.value)}
+                placeholder="e.g. 192.168.1.15"
+                style={{
+                  width: "100%", padding: "8px 12px", borderRadius: "6px",
+                  border: `1px solid ${currentTheme.border || "#303936"}`,
+                  background: currentTheme.bg || "#111514", color: currentTheme.text || "#F2F0E8",
+                  fontSize: "13px", boxSizing: "border-box"
+                }}
+              />
+            </div>
+
+            <p style={{ margin: "12px 0 5px 0", fontSize: "12px", opacity: 0.8 }}>Phone Target URL:</p>
+            <a href={phoneUrl} target="_blank" rel="noreferrer" style={{ color: currentTheme.brightAccent || "#6FAF8F", fontSize: "12px", wordBreak: "break-all" }}>
+              {phoneUrl}
+            </a>
+
+            <div style={{ marginTop: "20px" }}>
+              <button
+                onClick={() => setShowQR(false)}
+                style={{ padding: "8px 20px", background: currentTheme.brightAccent || "#6FAF8F", color: "#111514", border: "none", borderRadius: "6px", cursor: "pointer", fontWeight: "bold" }}
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <div style={{ position: "fixed", top: "15px", right: "15px", zIndex: 1000 }}>
         <GazeTracker onGazeUpdate={handleGazeUpdate} />
       </div>
 
-      {/* READING PASSAGE CARD */}
+      {/* READING PASSAGE CARD WITH VISUAL WARNING BANNER */}
       <div style={{
         maxWidth: "850px",
         margin: "50px auto",
         padding: "40px 45px",
         backgroundColor: currentTheme.cardBg || "transparent",
-        border: `1px solid ${currentTheme.border || "transparent"}`,
+        border: isWarningActive
+          ? "2px solid #F2C14E"
+          : `1px solid ${currentTheme.border || "transparent"}`,
         borderRadius: "16px",
-        boxShadow: currentTheme.cardBg ? "0 8px 32px rgba(0,0,0,0.3)" : "none",
+        boxShadow: isWarningActive
+          ? "0 0 30px rgba(242, 193, 78, 0.5)"
+          : (currentTheme.cardBg ? "0 8px 32px rgba(0,0,0,0.3)" : "none"),
         transition: "all 0.3s ease"
       }}>
+
+        {/* VISUAL WARNING BANNER WHEN LOOKING AWAY / STRAINED */}
+        {isWarningActive && (
+          <div style={{
+            backgroundColor: "#fff3cd",
+            color: "#856404",
+            border: "1px solid #ffeeba",
+            padding: "12px 20px",
+            borderRadius: "10px",
+            marginBottom: "25px",
+            fontWeight: "bold",
+            fontSize: "14px",
+            display: "flex",
+            alignItems: "center",
+            gap: "10px",
+            boxShadow: "0 4px 12px rgba(242, 193, 78, 0.4)",
+          }}>
+            ⚠️ <span><b>ATTENTION WARNING:</b> Looking away from screen or reading strain detected! Phone vibrating...</span>
+          </div>
+        )}
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "15px", marginBottom: "30px" }}>
           <h2 style={{ fontSize: "2.2rem", margin: 0, color: currentTheme.brightAccent || currentTheme.text }}>
             {passageTitle}

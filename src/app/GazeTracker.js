@@ -165,8 +165,12 @@ export default function GazeTracker({ onGazeUpdate }) {
               });
 
               if (onGazeUpdateRef.current) {
-                onGazeUpdateRef.current(currentGaze);
+                onGazeUpdateRef.current({ ...currentGaze, faceDetected: true });
               }
+            }
+          } else {
+            if (onGazeUpdateRef.current) {
+              onGazeUpdateRef.current({ faceDetected: false });
             }
           }
         } catch (error) {

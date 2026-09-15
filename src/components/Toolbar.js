@@ -21,6 +21,10 @@ export default function Toolbar({
   setBionicMode,
   behaviorSignals,
   themes,
+  onToggleQR,
+  showQR,
+  socketStatus = 'disconnected',
+  roomId = '',
 }) {
   const currentTheme = themes[activeTheme];
 
@@ -40,26 +44,57 @@ export default function Toolbar({
     >
       <div>
         <h1 style={{ margin: "0 0 10px 0" }}>DyslexiRead</h1>
-        {calibState === "idle" && (
-          <button
-            onClick={onStartCalibration}
-            style={{
-              padding: "8px 16px",
-              cursor: "pointer",
-              fontWeight: "bold",
-            }}
-          >
-            Calibrate Eye Tracker
-          </button>
-        )}
-        {calibState === "done" && (
-          <button
-            onClick={onRecalibrate}
-            style={{ padding: "8px 16px", cursor: "pointer" }}
-          >
-            Recalibrate
-          </button>
-        )}
+        <div style={{ display: "flex", gap: "10px", alignItems: "center", flexWrap: "wrap" }}>
+          {calibState === "idle" && (
+            <button
+              onClick={onStartCalibration}
+              style={{
+                padding: "8px 16px",
+                cursor: "pointer",
+                fontWeight: "bold",
+                borderRadius: "6px",
+                border: "none",
+                background: currentTheme.accent || "#3E6259",
+                color: "#fff",
+              }}
+            >
+              Calibrate Eye Tracker
+            </button>
+          )}
+          {calibState === "done" && (
+            <button
+              onClick={onRecalibrate}
+              style={{ padding: "8px 16px", cursor: "pointer", borderRadius: "6px" }}
+            >
+              Recalibrate
+            </button>
+          )}
+
+          {onToggleQR && (
+            <button
+              onClick={onToggleQR}
+              style={{
+                padding: "8px 14px",
+                cursor: "pointer",
+                fontWeight: "bold",
+                borderRadius: "6px",
+                border: `1px solid ${currentTheme.border || "#303936"}`,
+                background: `${currentTheme.brightAccent || "#6FAF8F"}22`,
+                color: currentTheme.text,
+                fontSize: "13px",
+              }}
+            >
+              📱 {showQR ? "Hide QR" : "Connect Phone (QR)"}
+            </button>
+          )}
+
+          {socketStatus && (
+            <span style={{ fontSize: "12px", opacity: 0.8 }}>
+              Phone Link: <b>{socketStatus}</b> {roomId ? `(${roomId})` : ''}
+            </span>
+          )}
+        </div>
+
         {calibError && (
           <span style={{ color: "red", marginLeft: "15px" }}>
             ⚠️ Calibration failed

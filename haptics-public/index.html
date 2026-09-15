@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>DyslexiFit Haptics Receiver</title>
+  <style>
+    body { font-family: system-ui, sans-serif; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; margin: 0; background: #121824; color: #fff; text-align: center; }
+    button { font-size: 22px; padding: 20px 40px; background: #3b82f6; color: white; border: none; border-radius: 12px; font-weight: bold; cursor: pointer; box-shadow: 0 8px 20px rgba(59, 130, 246, 0.4); transition: transform 0.1s, background 0.2s; }
+    button:active { transform: scale(0.96); }
+    #status { margin-top: 20px; font-size: 18px; opacity: 0.9; }
+    .room-badge { background: #1e293b; padding: 6px 14px; border-radius: 20px; font-size: 14px; color: #94a3b8; margin-top: 10px; border: 1px solid #334155; }
+  </style>
+</head>
+<body>
+  <button id="arm">Tap to Connect Phone</button>
+  <p id="status">Status: Disconnected</p>
+  <div id="roomBadge" class="room-badge">Room Code: Default</div>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script>
+    const socket = io();
+    const urlParams = new URLSearchParams(window.location.search);
+    const roomId = urlParams.get('room') || 'phone';
+    
+    document.getElementById('roomBadge').textContent = 'Room Code: ' + roomId;
+
+    document.getElementById('arm').onclick = () => {
+      if (navigator.vibrate) navigator.vibrate([100, 50, 100]);
+      socket.emit('join-room', roomId);
+      socket.emit('join', 'phone');
+      document.getElementById('status').innerHTML = 'Status: <b style="color:#4ade80">ARMED & READY</b>';
+      document.getElementById('arm').style.background = '#22c55e';
+      document.getElementById('arm').textContent = '✓ Connected';
+    };
+
+    socket.on('pulse', (p) => {
+      console.log('[Haptics] Vibration pulse received:', p);
+      if (navigator.vibrate) {
+        navigator.vibrate(p || [200, 100, 200]);
+      }
+    });
+  </script>
+</body>
+</html>
