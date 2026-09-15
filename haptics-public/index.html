@@ -1,0 +1,18 @@
+<!DOCTYPE html>
+<html>
+<head><title>DyslexiFit Haptics</title></head>
+<body>
+<button id="arm" style="font-size:24px;padding:20px">Tap to connect</button>
+<p id="status">idle</p>
+<script src="/socket.io/socket.io.js"></script>
+<script>
+  const socket = io();
+  document.getElementById('arm').onclick = () => {
+    navigator.vibrate(50);
+    socket.emit('join', 'phone');
+    document.getElementById('status').textContent = 'armed';
+  };
+  socket.on('pulse', (p) => navigator.vibrate(p || 100));
+</script>
+</body>
+</html>
