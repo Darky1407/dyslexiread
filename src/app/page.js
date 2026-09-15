@@ -80,6 +80,7 @@ export default function Home() {
   const [fontSize, setFontSize] = useState("1.25rem");
   const [lineHeight, setLineHeight] = useState("2.2");
   const [letterSpacing, setLetterSpacing] = useState("normal");
+  const [fontFamily, setFontFamily] = useState("sans-serif");
   const [activeTheme, setActiveTheme] = useState("neuroRead");
   const [focusRulerEnabled, setFocusRulerEnabled] = useState(true);
   const [showEyeCursor, setShowEyeCursor] = useState(false);
@@ -302,7 +303,7 @@ export default function Home() {
   const currentTheme = THEMES[activeTheme];
 
   return (
-    <main style={{ minHeight: "100vh", position: "relative", fontFamily: "sans-serif", backgroundColor: currentTheme.bg, color: currentTheme.text, transition: "background-color 0.3s, color 0.3s" }}>
+    <main style={{ minHeight: "100vh", position: "relative", fontFamily: fontFamily, backgroundColor: currentTheme.bg, color: currentTheme.text, transition: "background-color 0.3s, color 0.3s" }}>
       
       {/* EXTRACTED TOOLBAR COMPONENT */}
       <Toolbar 
@@ -312,6 +313,8 @@ export default function Home() {
         onRecalibrate={() => { setCalibState("idle"); setCalibIndex(0); setRawPoints([]); }}
         activeTheme={activeTheme}
         setActiveTheme={setActiveTheme}
+        fontFamily={fontFamily}
+        setFontFamily={setFontFamily}
         fontSize={fontSize}
         setFontSize={setFontSize}
         lineHeight={lineHeight}

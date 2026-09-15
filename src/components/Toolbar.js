@@ -7,6 +7,8 @@ export default function Toolbar({
   onRecalibrate,
   activeTheme,
   setActiveTheme,
+  fontFamily,
+  setFontFamily,
   fontSize,
   setFontSize,
   lineHeight,
@@ -94,6 +96,26 @@ export default function Toolbar({
                 {t.name}
               </option>
             ))}
+          </select>
+        </div>
+
+        <div>
+          <label
+            style={{ fontSize: "12px", display: "block", marginBottom: "3px" }}
+          >
+            Font Family:
+          </label>
+          <select
+            value={fontFamily}
+            onChange={(e) => setFontFamily(e.target.value)}
+            style={{ padding: "5px", width: "120px" }}
+          >
+            <option value="sans-serif">System Sans</option>
+            <option value="var(--font-geist-sans)">Geist Sans</option>
+            <option value="'Comic Sans MS', 'Comic Sans', cursive">Comic Sans</option>
+            <option value="Arial, sans-serif">Arial</option>
+            <option value="Verdana, sans-serif">Verdana</option>
+            <option value="'OpenDyslexic', sans-serif">OpenDyslexic</option>
           </select>
         </div>
 
